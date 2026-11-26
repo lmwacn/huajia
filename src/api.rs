@@ -1,11 +1,13 @@
 use crate::{
     Result,
     control::{self, Mode},
+    home,
     keys::KeyStore,
-    lan, miio,
+    miio,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use tiny_http::{Header, Method, Request, Response, Server};
@@ -58,17 +60,23 @@ fn handle(request: &mut Request, keys: &KeyStore) -> (u16, Value) {
 
     let url = request.url().to_owned();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
-    let Some(mode) = transport_query(query) else {
+    let Some((mode, home_id)) = device_query(query) else {
         return (
             400,
-            json!({"error": "transport 取值须为 auto、lan 或 cloud"}),
+            json!({"error": "查询参数无效，transport 取值须为 auto、lan 或 cloud"}),
         );
     };
+    if home_id.is_some() && path != "/v1/devices" {
+        return (400, json!({"error": "home 参数只用于查询设备列表"}));
+    }
     let result = match (request.method(), path) {
-        (&Method::Get, "/v1/devices") if mode == Mode::Lan => lan::list().and_then(to_json),
-        (&Method::Get, "/v1/devices") => control::cloud()
-            .and_then(|client| client.devices())
-            .and_then(to_json),
+        (&Method::Get, "/v1/homes") if query.is_empty() => home::list().and_then(to_json),
+        (&Method::Get, "/v1/devices") if mode == Mode::Lan => {
+            control::lan_devices(home_id.as_deref()).and_then(to_json)
+        }
+        (&Method::Get, "/v1/devices") => {
+            control::cloud_devices(home_id.as_deref()).and_then(to_json)
+        }
         (method @ (&Method::Get | &Method::Put), path) => {
             let Some(id) = path
                 .strip_prefix("/v1/devices/")
@@ -103,13 +111,24 @@ fn handle(request: &mut Request, keys: &KeyStore) -> (u16, Value) {
     }
 }
 
-fn transport_query(query: &str) -> Option<Mode> {
-    match query {
-        "" | "transport=auto" => Some(Mode::Auto),
-        "transport=lan" => Some(Mode::Lan),
-        "transport=cloud" => Some(Mode::Cloud),
-        _ => None,
+fn device_query(query: &str) -> Option<(Mode, Option<Cow<'_, str>>)> {
+    let mut mode = None;
+    let mut home = None;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        match key.as_ref() {
+            "transport" if mode.is_none() => {
+                mode = Some(match value.as_ref() {
+                    "auto" => Mode::Auto,
+                    "lan" => Mode::Lan,
+                    "cloud" => Mode::Cloud,
+                    _ => return None,
+                });
+            }
+            "home" if home.is_none() && !value.is_empty() => home = Some(value),
+            _ => return None,
+        }
     }
+    Some((mode.unwrap_or(Mode::Auto), home))
 }
 
 #[derive(Deserialize)]
@@ -148,5 +167,15 @@ mod tests {
         assert!(listen_address("[::1]:8765").is_some());
         assert!(listen_address("0.0.0.0:8765").is_none());
         assert!(listen_address("8.8.8.8:8765").is_none());
+    }
+
+    #[test]
+    fn inventory_query_accepts_a_single_home_and_transport() {
+        let (mode, home) = device_query("home=123&transport=lan").unwrap();
+        assert!(mode == Mode::Lan);
+        assert_eq!(home.as_deref(), Some("123"));
+        assert!(device_query("home=123&home=456").is_none());
+        assert!(device_query("home=").is_none());
+        assert!(device_query("transport=lan&transport=cloud").is_none());
     }
 }

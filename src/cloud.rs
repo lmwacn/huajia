@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::io::Read;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -49,6 +49,33 @@ struct Page {
     has_more: bool,
     #[serde(default)]
     next_start_did: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Home {
+    pub id: String,
+    pub name: String,
+    pub device_ids: BTreeSet<String>,
+}
+
+#[derive(Deserialize)]
+struct HomePage {
+    homelist: Vec<HomeRecord>,
+    #[serde(default)]
+    has_more: bool,
+}
+
+#[derive(Deserialize)]
+struct HomeRecord {
+    id: String,
+    name: String,
+    dids: Option<Vec<String>>,
+    roomlist: Option<Vec<RoomRecord>>,
+}
+
+#[derive(Deserialize)]
+struct RoomRecord {
+    dids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -154,11 +181,74 @@ impl Client {
     }
 
     pub fn devices(&self) -> Result<Vec<Device>> {
+        self.device_pages(&[])
+    }
+
+    pub fn homes(&self) -> Result<Vec<Home>> {
+        let response: HomePage = self.post(
+            "/v2/homeroom/gethome_merged",
+            &json!({
+                "fg": true, "fetch_share": true, "fetch_share_dev": true,
+                "fetch_cariot": true, "limit": 300, "app_ver": 7, "plat_form": 0
+            }),
+        )?;
+        if response.has_more {
+            return Err("米家返回了未完整加载的家庭列表".into());
+        }
+        Ok(response
+            .homelist
+            .into_iter()
+            .map(|home| Home {
+                id: home.id,
+                name: home.name,
+                device_ids: home
+                    .dids
+                    .into_iter()
+                    .flatten()
+                    .chain(
+                        home.roomlist
+                            .into_iter()
+                            .flatten()
+                            .flat_map(|room| room.dids.into_iter().flatten()),
+                    )
+                    .collect(),
+            })
+            .collect())
+    }
+
+    pub fn home(&self, id: &str) -> Result<Home> {
+        self.homes()?
+            .into_iter()
+            .find(|home| home.id == id)
+            .ok_or_else(|| format!("找不到米家家庭 {id:?}，请运行 huajia homes").into())
+    }
+
+    pub fn devices_in_home(&self, id: &str) -> Result<Vec<Device>> {
+        let home = self.home(id)?;
+        let ids: Vec<_> = home.device_ids.iter().map(String::as_str).collect();
+        self.devices_by_ids(&ids)
+    }
+
+    fn devices_by_ids(&self, ids: &[&str]) -> Result<Vec<Device>> {
+        let mut devices = Vec::new();
+        for chunk in ids.chunks(100) {
+            devices.extend(
+                self.device_pages(chunk)?
+                    .into_iter()
+                    .filter(|device| chunk.contains(&device.id.as_str())),
+            );
+        }
+        devices.sort_by(|a, b| a.id.cmp(&b.id));
+        devices.dedup_by(|a, b| a.id == b.id);
+        Ok(devices)
+    }
+
+    fn device_pages(&self, ids: &[&str]) -> Result<Vec<Device>> {
         let mut devices = Vec::new();
         let mut seen = HashSet::new();
         let mut cursor = String::new();
         loop {
-            let mut input = json!({"dids": [], "limit": 200, "get_split_device": true});
+            let mut input = json!({"dids": ids, "limit": 200, "get_split_device": true});
             if !cursor.is_empty() {
                 input["start_did"] = json!(cursor);
             }
@@ -203,7 +293,7 @@ impl Client {
     }
 
     pub fn device(&self, id: &str) -> Result<Device> {
-        self.devices()?
+        self.devices_by_ids(&[id])?
             .into_iter()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("找不到设备 {id:?}").into())
@@ -480,7 +570,7 @@ mod tests {
         let responder = thread::spawn(move || {
             let mut on = true;
             let mut writes = 0;
-            for _ in 0..9 {
+            for _ in 0..12 {
                 let mut request = server
                     .recv_timeout(Duration::from_secs(5))
                     .unwrap()
@@ -508,7 +598,23 @@ mod tests {
                 let raw = decode_cloud(fields["data"].as_bytes(), false, &key).unwrap();
                 let input: Value = serde_json::from_slice(&raw).unwrap();
                 let response = match request.url() {
+                    "/app/v2/homeroom/gethome_merged" => json!({
+                        "homelist": [
+                            {"id":"first","name":"家","dids":["lamp"],"roomlist":[{"dids":["lamp","room-lamp"]}]},
+                            {"id":"empty","name":"空房","dids":null,"roomlist":[]}
+                        ],
+                        "has_more":false
+                    }),
+                    "/app/v2/home/device_list_page" if input["dids"] == json!(["lamp"]) => {
+                        json!({"list":[{"did":"lamp","name":"灯","spec_type":LAMP_SPEC}]})
+                    }
+                    "/app/v2/home/device_list_page"
+                        if input["dids"] == json!(["lamp", "room-lamp"]) =>
+                    {
+                        json!({"list":[{"did":"lamp"},{"did":"room-lamp"},{"did":"switch"}]})
+                    }
                     "/app/v2/home/device_list_page" if input.get("start_did").is_none() => {
+                        assert_eq!(input["dids"], json!([]));
                         json!({"list":[{"did":"switch"}],"has_more":true,"next_start_did":"switch"})
                     }
                     "/app/v2/home/device_list_page" => {
@@ -553,6 +659,16 @@ mod tests {
         client.spec = format!("{base}/spec");
         assert!(client.get_power("lamp").unwrap().power);
         assert!(!client.set_power("lamp", false).unwrap().power);
+        assert_eq!(client.devices().unwrap().len(), 2);
+        let scoped = client.devices_in_home("first").unwrap();
+        assert_eq!(
+            scoped
+                .iter()
+                .map(|device| device.id.as_str())
+                .collect::<Vec<_>>(),
+            ["lamp", "room-lamp"],
+        );
+        assert!(client.devices_in_home("empty").unwrap().is_empty());
         responder.join().unwrap();
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     Result,
-    cloud::{Client, PowerState},
-    lan, session,
+    cloud::{Client, Device, PowerState},
+    home, lan, session,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -13,6 +13,31 @@ pub enum Mode {
 
 pub fn cloud() -> Result<Client> {
     Ok(Client::new(session::Session::load(&session::path()?)?))
+}
+
+pub fn cloud_devices(home_id: Option<&str>) -> Result<Vec<Device>> {
+    let client = cloud()?;
+    if let Some(id) = home_id {
+        return client.devices_in_home(id);
+    }
+    match home::current()? {
+        Some(home) => client.devices_in_home(&home.id),
+        None => client.devices(),
+    }
+}
+
+pub fn lan_devices(home_id: Option<&str>) -> Result<Vec<lan::DeviceInfo>> {
+    let selected = home::current()?;
+    if let Some(id) = home_id
+        && !selected.as_ref().is_some_and(|home| home.id == id)
+    {
+        return Err("离线查询只支持已保存的当前家庭，请联网运行 huajia home use <家庭ID>".into());
+    }
+    let mut devices = lan::list()?;
+    if let Some(home) = selected {
+        devices.retain(|device| home.device_ids.contains(&device.did));
+    }
+    Ok(devices)
 }
 
 pub fn power(id: &str, requested: Option<bool>, mode: Mode) -> Result<PowerState<'_>> {

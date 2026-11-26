@@ -1,6 +1,7 @@
 mod api;
 mod cloud;
 mod control;
+mod home;
 mod keys;
 mod lan;
 mod miio;
@@ -19,7 +20,11 @@ const USAGE: &str = "用法
   huajia --version
   huajia update [--check] [--json]
   huajia login
-  huajia devices [--lan | --cloud] [--json]
+  huajia homes [--json]
+  huajia home use <家庭ID> [--json]
+  huajia home current [--json]
+  huajia home clear
+  huajia devices [--home <家庭ID>] [--lan | --cloud] [--json]
   huajia lan import <设备 ID> [--json]
   huajia get <设备 ID> power [--lan | --cloud] [--json]
   huajia set <设备 ID> power <on|off> [--lan | --cloud] [--json]
@@ -32,7 +37,11 @@ const USAGE: &str = "用法
 enum Command<'a> {
     Login,
     Update(bool),
-    Devices(Mode),
+    Homes,
+    SelectHome(&'a str),
+    CurrentHome,
+    ClearHome,
+    Devices(Mode, Option<&'a str>),
     Import(&'a str),
     Power(&'a str, Option<bool>, Mode),
     Key(&'a str, bool),
@@ -83,7 +92,14 @@ fn parse<'a>(args: &[&'a str], json: bool) -> Option<Command<'a>> {
         ["update"] if mode == Mode::Auto => Some(Command::Update(false)),
         ["update", "--check"] if mode == Mode::Auto => Some(Command::Update(true)),
         ["login"] if !json && mode == Mode::Auto => Some(Command::Login),
-        ["devices"] => Some(Command::Devices(mode)),
+        ["homes"] if mode == Mode::Auto => Some(Command::Homes),
+        ["home", "use", id] if mode == Mode::Auto && !id.is_empty() => {
+            Some(Command::SelectHome(id))
+        }
+        ["home", "current"] if mode == Mode::Auto => Some(Command::CurrentHome),
+        ["home", "clear"] if mode == Mode::Auto && !json => Some(Command::ClearHome),
+        ["devices"] => Some(Command::Devices(mode, None)),
+        ["devices", "--home", id] if !id.is_empty() => Some(Command::Devices(mode, Some(id))),
         ["lan", "import", id] if mode == Mode::Auto && !id.is_empty() => Some(Command::Import(id)),
         ["get", id, "power"] if !id.is_empty() => Some(Command::Power(id, None, mode)),
         ["set", id, "power", value @ ("on" | "off")] if !id.is_empty() => {
@@ -129,8 +145,40 @@ fn execute(command: Command<'_>, json: bool, out: &mut impl Write) -> Result<()>
             session::login()?.save(&session::path()?)?;
             writeln!(out, "小米授权已保存")?;
         }
-        Command::Devices(Mode::Lan) => {
-            let devices = lan::list()?;
+        Command::Homes => {
+            let homes = home::list()?;
+            if json {
+                return write_json(out, &homes);
+            }
+            writeln!(out, "当前	家庭 ID	名称	设备数")?;
+            for h in homes {
+                let selected = if h.current { "*" } else { " " };
+                writeln!(out, "{selected}	{}	{}	{}", h.id, h.name, h.device_count)?;
+            }
+        }
+        Command::SelectHome(id) => {
+            let selected = home::select(id)?;
+            if json {
+                return write_json(out, &selected);
+            }
+            writeln!(out, "当前家庭：{}（{}）", selected.name, selected.id)?;
+        }
+        Command::CurrentHome => {
+            let selected = home::current_summary()?;
+            if json {
+                return write_json(out, &selected);
+            }
+            match selected {
+                Some(home) => writeln!(out, "当前家庭：{}（{}）", home.name, home.id)?,
+                None => writeln!(out, "未设置当前家庭，显示全部设备")?,
+            }
+        }
+        Command::ClearHome => {
+            home::clear()?;
+            writeln!(out, "已清除当前家庭，显示全部设备")?;
+        }
+        Command::Devices(Mode::Lan, home_id) => {
+            let devices = control::lan_devices(home_id)?;
             if json {
                 return write_json(out, &devices);
             }
@@ -139,8 +187,8 @@ fn execute(command: Command<'_>, json: bool, out: &mut impl Write) -> Result<()>
                 writeln!(out, "{}\t{}\t{}\t{}", d.did, d.name, d.model, d.ip)?;
             }
         }
-        Command::Devices(_) => {
-            let devices = control::cloud()?.devices()?;
+        Command::Devices(_, home_id) => {
+            let devices = control::cloud_devices(home_id)?;
             if json {
                 return write_json(out, &devices);
             }

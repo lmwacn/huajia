@@ -67,6 +67,21 @@ huajia --version
 
 自动化可以运行 `huajia update --check --json`，根据 `status` 的 `available` 或 `up_to_date` 决定是否执行更新。
 
+## 多家庭
+
+```sh
+huajia homes
+huajia home use <家庭ID>
+huajia home current
+huajia devices --json
+huajia devices --home <其他家庭ID> --json
+huajia home clear
+```
+
+`home use` 将当前家庭保存到 `~/.openmihome/home.json`，以后运行 `devices` 默认只查看这个家庭。`--home` 只覆盖这一条命令，`home clear` 恢复查看全部设备。开关命令仍按显式提供的设备 ID 操作。
+
+离线时，`devices --lan` 根据上次选择家庭时保存的归属筛选已导入的设备。米家里调整归属后，可以联网重新执行 `home use` 刷新离线列表。
+
 ## 局域网控制
 
 先用米家云导入一次设备地址、本地 token 和开关属性。CLI 将这些资料保存在 `~/.openmihome/lan/`。设备换 IP 或 token 后，重新导入即可。
@@ -82,7 +97,7 @@ huajia set <设备ID> power on --cloud --json
 - `--lan` 强制本地。异网、网络隔离、IP 变化或设备不响应时，CLI 会返回错误。蓝牙 Mesh 设备需要有本地转发能力的网关。
 - `--cloud` 强制米家云。局域网写入一旦发出，CLI 就不会再经云端重复发出。写入结果不明时，先用 `get` 检查状态。
 
-`devices` 默认列出米家云中的设备，`devices --lan` 列出已导入的本地设备。读写结果的 `transport` 显示实际路径。CLI 的 `--json` 把结果写到 stdout，错误写到 stderr。退出码 `0` 表示成功，`1` 表示执行失败，`2` 表示参数有误。
+`devices` 从米家云查询设备，`devices --lan` 列出已导入的本地设备。读写结果的 `transport` 显示实际路径。CLI 的 `--json` 把结果写到 stdout，错误写到 stderr。退出码 `0` 表示成功，`1` 表示执行失败，`2` 表示参数有误。
 
 ## HTTP API
 
@@ -109,20 +124,22 @@ curl -X PUT -H "Authorization: Bearer $HUAJIA_KEY" \
 
 查询参数 `transport` 支持 `auto`、`lan`、`cloud`，含义与 CLI 相同。API Key 可使用这些设备接口。
 
+用 `GET /v1/homes` 列出家庭。设备列表默认采用服务运行账号保存的当前家庭，用 `GET /v1/devices?home=<家庭ID>` 可以临时查看指定家庭。
+
 支持 Shell 的 AI 可直接使用 CLI。项目 Skill 位于 [SKILL.md](.agents/skills/huajia/SKILL.md)。
 
 ## 启动时间与资源占用
 
-以下为 `v0.1.1` 发布构建在 Apple M5、macOS ARM64 上的实测结果。
+以下为 `v0.1.2` 发布构建在 Apple M5、macOS ARM64 上的实测结果。
 
 | 指标 | 测量结果 |
 | --- | ---: |
-| 单文件可执行程序 | 1.88 MiB |
-| CLI 启动至 `--help` 执行完毕 | 2.08 ms |
-| HTTP 服务从启动到开始监听 | 2.33 ms |
-| CLI 执行 `--help` 的峰值常驻内存 | 1.94 MiB |
-| HTTP 服务空闲常驻内存 | 2.19 MiB |
-| 通过米家云读取真实设备状态的峰值常驻内存 | 11.34 MiB |
+| 单文件可执行程序 | 1.92 MiB |
+| CLI 启动至 `--help` 执行完毕 | 2.46 ms |
+| HTTP 服务从启动到开始监听 | 2.54 ms |
+| CLI 执行 `--help` 的峰值常驻内存 | 1.89 MiB |
+| HTTP 服务空闲常驻内存 | 2.14 MiB |
+| 通过米家云读取真实设备状态的峰值常驻内存 | 11.11 MiB |
 
 CLI 和 HTTP 启动时间分别取 30 次和 10 次预热后运行的中位数。HTTP 内存于监听后空闲 2 秒采样。设备请求的耗时受网络和设备响应影响。
 
