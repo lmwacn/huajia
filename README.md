@@ -8,11 +8,43 @@
 
 目前支持中国大陆区米家云和兼容 miIO 的 IPv4 局域网设备，可读写 MIoT 灯具、风扇和插座的开关。已导入的设备优先走局域网，本地不可用时自动走米家云。
 
-## 下载与快速开始
+## 下载与安装
 
 从 [GitHub Releases](https://github.com/lmwacn/huajia/releases) 下载对应 Windows、macOS 或 Linux 的 x64 或 ARM64 压缩包。解压后即可运行，无需安装语言运行时。CLI 执行完命令就退出，需要 HTTP 接口时再启动服务。
 
-将可执行文件放入 `PATH` 后运行以下命令。也可以在解压目录里用 `./huajia`（Windows PowerShell 用 `.\huajia.exe`）。
+### macOS / Linux
+
+在解压目录执行。安装后，当前用户可以从任意目录运行 `huajia`，无需管理员权限。
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 755 ./huajia "$HOME/.local/bin/huajia"
+export PATH="$HOME/.local/bin:$PATH"
+huajia --version
+```
+
+如果新终端找不到 `huajia`，将上面的 `export PATH=...` 加到 Shell 的启动文件。zsh 通常用 `~/.zshrc`，Bash 通常用 `~/.bashrc`。
+
+### Windows
+
+在解压目录打开 PowerShell，执行以下命令，将程序安装到当前用户的目录并加入用户 `Path`。
+
+```powershell
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\huajia'
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+Copy-Item .\huajia.exe $installDir -Force
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $installDir) {
+    $newPath = (@($userPath, $installDir) | Where-Object { $_ }) -join ';'
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+}
+$env:Path = "$installDir;$env:Path"
+huajia --version
+```
+
+### 快速开始
+
+也可以在解压目录直接运行 `./huajia`（Windows PowerShell 用 `.\huajia.exe`）。
 
 ```sh
 huajia login
