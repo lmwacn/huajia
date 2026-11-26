@@ -55,6 +55,18 @@ huajia set <设备ID> power off --json
 
 打开 `login` 打印的图片路径，用米家 App 扫码确认。云端授权保存在 `~/.openmihome/session.json`，Windows 上对应 `%USERPROFILE%\.openmihome\session.json`。自动化和 HTTP 服务应以保存授权的用户运行。
 
+## 更新
+
+```sh
+huajia update --check      # 只检查更新
+huajia update              # 下载并安装最新正式版
+huajia --version
+```
+
+更新从 [GitHub Releases](https://github.com/lmwacn/huajia/releases) 选取当前系统和架构的压缩包。程序校验 GitHub 提供的 SHA-256 后，替换当前运行的可执行文件。运行更新的用户需要有安装目录的写权限。更新后，重启已运行的 HTTP 服务即可使用新版。
+
+自动化可以运行 `huajia update --check --json`，根据 `status` 的 `available` 或 `up_to_date` 决定是否执行更新。
+
 ## 局域网控制
 
 先用米家云导入一次设备地址、本地 token 和开关属性。CLI 将这些资料保存在 `~/.openmihome/lan/`。设备换 IP 或 token 后，重新导入即可。
@@ -101,16 +113,16 @@ curl -X PUT -H "Authorization: Bearer $HUAJIA_KEY" \
 
 ## 启动时间与资源占用
 
-以下为 `v0.1.0` 发布构建在 Apple M5、macOS ARM64 上的实测结果。
+以下为 `v0.1.1` 发布构建在 Apple M5、macOS ARM64 上的实测结果。
 
 | 指标 | 测量结果 |
 | --- | ---: |
-| 单文件可执行程序 | 1.85 MiB |
-| CLI 启动至 `--help` 执行完毕 | 2.13 ms |
-| HTTP 服务从启动到开始监听 | 2.26 ms |
+| 单文件可执行程序 | 1.88 MiB |
+| CLI 启动至 `--help` 执行完毕 | 2.08 ms |
+| HTTP 服务从启动到开始监听 | 2.33 ms |
 | CLI 执行 `--help` 的峰值常驻内存 | 1.94 MiB |
-| HTTP 服务空闲常驻内存 | 2.14 MiB |
-| 通过米家云读取真实设备状态的峰值常驻内存 | 11.25 MiB |
+| HTTP 服务空闲常驻内存 | 2.19 MiB |
+| 通过米家云读取真实设备状态的峰值常驻内存 | 11.34 MiB |
 
 CLI 和 HTTP 启动时间分别取 30 次和 10 次预热后运行的中位数。HTTP 内存于监听后空闲 2 秒采样。设备请求的耗时受网络和设备响应影响。
 

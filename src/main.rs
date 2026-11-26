@@ -5,6 +5,7 @@ mod keys;
 mod lan;
 mod miio;
 mod session;
+mod update;
 
 use control::Mode;
 use std::error::Error;
@@ -16,6 +17,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const USAGE: &str = "用法
   huajia --version
+  huajia update [--check] [--json]
   huajia login
   huajia devices [--lan | --cloud] [--json]
   huajia lan import <设备 ID> [--json]
@@ -29,6 +31,7 @@ const USAGE: &str = "用法
 
 enum Command<'a> {
     Login,
+    Update(bool),
     Devices(Mode),
     Import(&'a str),
     Power(&'a str, Option<bool>, Mode),
@@ -77,6 +80,8 @@ fn parse<'a>(args: &[&'a str], json: bool) -> Option<Command<'a>> {
         }
     }
     match command.as_slice() {
+        ["update"] if mode == Mode::Auto => Some(Command::Update(false)),
+        ["update", "--check"] if mode == Mode::Auto => Some(Command::Update(true)),
         ["login"] if !json && mode == Mode::Auto => Some(Command::Login),
         ["devices"] => Some(Command::Devices(mode)),
         ["lan", "import", id] if mode == Mode::Auto && !id.is_empty() => Some(Command::Import(id)),
@@ -99,6 +104,27 @@ fn parse<'a>(args: &[&'a str], json: bool) -> Option<Command<'a>> {
 
 fn execute(command: Command<'_>, json: bool, out: &mut impl Write) -> Result<()> {
     match command {
+        Command::Update(check_only) => {
+            let result = update::run(check_only)?;
+            if json {
+                return write_json(out, &result);
+            }
+            match result.status {
+                update::Status::UpToDate => {
+                    writeln!(out, "当前版本 v{} 已是最新", result.current_version)?
+                }
+                update::Status::Available => writeln!(
+                    out,
+                    "发现新版本 v{}，运行 huajia update 安装",
+                    result.latest_version
+                )?,
+                update::Status::Updated => writeln!(
+                    out,
+                    "花甲已从 v{} 更新到 v{}",
+                    result.current_version, result.latest_version
+                )?,
+            }
+        }
         Command::Login => {
             session::login()?.save(&session::path()?)?;
             writeln!(out, "小米授权已保存")?;
